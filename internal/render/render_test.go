@@ -107,17 +107,38 @@ func TestRenderIntegration(t *testing.T) {
 	if len(result.JPEG) == 0 || !strings.HasPrefix(string(result.JPEG), "\xff\xd8") {
 		t.Fatal("output is not a JPEG file")
 	}
+	jpegWidth, jpegHeight, err := imageSizeBytes(result.JPEG)
+	if err != nil {
+		t.Fatalf("decode jpeg size: %v", err)
+	}
+	if result.JPEGWidth != jpegWidth || result.JPEGHeight != jpegHeight {
+		t.Errorf("reported JPEG size %dx%d, decoded %dx%d", result.JPEGWidth, result.JPEGHeight, jpegWidth, jpegHeight)
+	}
+	if len(result.Thumbnail) == 0 || !strings.HasPrefix(string(result.Thumbnail), "\xff\xd8") {
+		t.Fatal("output is not a JPEG thumbnail")
+	}
+	thumbWidth, thumbHeight, err := imageSizeBytes(result.Thumbnail)
+	if err != nil {
+		t.Fatalf("decode thumbnail size: %v", err)
+	}
+	if thumbWidth > inlineThumbnailSide || thumbHeight > inlineThumbnailSide {
+		t.Errorf("thumbnail is %dx%d, want each side <= %d", thumbWidth, thumbHeight, inlineThumbnailSide)
+	}
 
 	linked, err := r.Render(ctx, "", `\hypertarget{details}{Details}\par\hyperlink{details}{Go to details}`, 150)
 	if err != nil {
 		t.Fatalf("hyperlink render failed: %v", err)
 	}
-	if len(linked.PDF) == 0 || len(linked.PNG) == 0 || len(linked.JPEG) == 0 {
+	if len(linked.PDF) == 0 || len(linked.PNG) == 0 || len(linked.JPEG) == 0 || len(linked.Thumbnail) == 0 {
 		t.Fatal("hyperlink render returned an empty format")
 	}
 }
 
 func pngSizeBytes(data []byte) (int, int, error) {
+	return imageSizeBytes(data)
+}
+
+func imageSizeBytes(data []byte) (int, int, error) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return 0, 0, err

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -74,9 +75,13 @@ func (f *fakeFiles) Put(_ context.Context, ext, _ string, data []byte) (string, 
 
 func testBot() *Bot {
 	return &Bot{
-		api:           &tgbotapi.BotAPI{Self: tgbotapi.User{UserName: "latexgrambot"}},
-		cfg:           &config.Config{MaxExpressionLen: 4000, RichTextEnabled: true, RichDefaultMath: true, RenderDPI: 600},
-		ren:           &stubRenderer{results: &render.Result{PNG: []byte("png"), JPEG: []byte("jpg"), PDF: []byte("pdf")}},
+		api: &tgbotapi.BotAPI{Self: tgbotapi.User{UserName: "latexgrambot"}},
+		cfg: &config.Config{MaxExpressionLen: 4000, RichTextEnabled: true, RichDefaultMath: true, RenderDPI: 600},
+		ren: &stubRenderer{results: &render.Result{
+			PNG: []byte("png"), JPEG: []byte("jpg"),
+			JPEGWidth: 1600, JPEGHeight: 600,
+			Thumbnail: []byte("thumbnail"), PDF: []byte("pdf"),
+		}},
 		user:          &fakeSettings{},
 		rec:           &fakeRecorder{},
 		files:         &fakeFiles{},
@@ -103,15 +108,28 @@ func TestInlineResultsUsesPresignedFiles(t *testing.T) {
 		t.Fatalf("got %d results, want 3", len(results))
 	}
 
-	photo, ok := results[0].(tgbotapi.InlineQueryResultPhoto)
+	photo, ok := results[0].(inlineQueryResultPhoto)
 	if !ok {
-		t.Fatalf("result 0 is %T, want InlineQueryResultPhoto", results[0])
+		t.Fatalf("result 0 is %T, want inlineQueryResultPhoto", results[0])
 	}
-	if !strings.Contains(photo.URL, ".jpg?") || photo.ThumbURL != photo.URL {
-		t.Errorf("photo URL/thumb = %q/%q", photo.URL, photo.ThumbURL)
+	if !strings.Contains(photo.PhotoURL, ".jpg?") || !strings.Contains(photo.ThumbnailURL, ".thumb.jpg?") {
+		t.Errorf("photo URL/thumbnail = %q/%q", photo.PhotoURL, photo.ThumbnailURL)
+	}
+	if photo.PhotoURL == photo.ThumbnailURL {
+		t.Error("full photo and thumbnail must use different objects")
+	}
+	if photo.PhotoWidth != 1600 || photo.PhotoHeight != 600 {
+		t.Errorf("photo dimensions = %dx%d", photo.PhotoWidth, photo.PhotoHeight)
 	}
 	if photo.Title != "PNG" {
 		t.Errorf("photo title = %q", photo.Title)
+	}
+	encoded, err := json.Marshal(photo)
+	if err != nil {
+		t.Fatalf("marshal photo result: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"thumbnail_url"`) || strings.Contains(string(encoded), `"thumb_url"`) {
+		t.Errorf("unexpected photo JSON: %s", encoded)
 	}
 
 	document, ok := results[1].(tgbotapi.InlineQueryResultDocument)
@@ -145,7 +163,7 @@ func TestInlineResultsUsesPresignedFiles(t *testing.T) {
 		t.Fatalf("unexpected inline math node: %+v", parts[1])
 	}
 	files := b.files.(*fakeFiles)
-	if string(files.puts["jpg"]) != "jpg" || string(files.puts["pdf"]) != "pdf" {
+	if string(files.puts["jpg"]) != "jpg" || string(files.puts["thumb.jpg"]) != "thumbnail" || string(files.puts["pdf"]) != "pdf" {
 		t.Fatalf("stored files = %#v", files.puts)
 	}
 }
@@ -156,13 +174,13 @@ func TestInlineResultsCachesPresignedURLs(t *testing.T) {
 	first := b.inlineResults(context.Background(), query)
 	second := b.inlineResults(context.Background(), query)
 	files := b.files.(*fakeFiles)
-	if files.putCalls != 2 {
-		t.Fatalf("put calls = %d, want 2 (one per format, cached afterwards)", files.putCalls)
+	if files.putCalls != 3 {
+		t.Fatalf("put calls = %d, want 3 (photo, thumbnail and PDF, cached afterwards)", files.putCalls)
 	}
-	firstPhoto := first[0].(tgbotapi.InlineQueryResultPhoto)
-	secondPhoto := second[0].(tgbotapi.InlineQueryResultPhoto)
-	if firstPhoto.URL != secondPhoto.URL {
-		t.Fatalf("second query re-rendered: %q vs %q", firstPhoto.URL, secondPhoto.URL)
+	firstPhoto := first[0].(inlineQueryResultPhoto)
+	secondPhoto := second[0].(inlineQueryResultPhoto)
+	if firstPhoto.PhotoURL != secondPhoto.PhotoURL || firstPhoto.ThumbnailURL != secondPhoto.ThumbnailURL {
+		t.Fatalf("second query re-rendered: %+v vs %+v", firstPhoto, secondPhoto)
 	}
 }
 
@@ -201,8 +219,22 @@ func TestInlineResultsRichDisabled(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
-	if _, ok := results[0].(tgbotapi.InlineQueryResultPhoto); !ok {
-		t.Fatalf("result 0 is %T, want InlineQueryResultPhoto", results[0])
+	if _, ok := results[0].(inlineQueryResultPhoto); !ok {
+		t.Fatalf("result 0 is %T, want inlineQueryResultPhoto", results[0])
+	}
+}
+
+func TestSaveFileIDsUsesPersistentCache(t *testing.T) {
+	b := testBot()
+	cache := &fakeCache{}
+	b.cache = cache
+	b.savePhotoID("hash", "photo-id")
+	b.saveDocID("hash", "doc-id")
+	if cache.refs.PhotoID != "photo-id" || cache.refs.DocID != "doc-id" {
+		t.Fatalf("saved refs = %+v", cache.refs)
+	}
+	if got := b.refsCache["hash"].refs; got != cache.refs {
+		t.Fatalf("memory refs = %+v, persistent refs = %+v", got, cache.refs)
 	}
 }
 

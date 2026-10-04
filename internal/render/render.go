@@ -39,6 +39,9 @@ const (
 
 	// maxRenderedSide guards against pathologically tall formulas.
 	maxRenderedSide = 4096
+
+	// inlineThumbnailSide is Telegram's conventional maximum thumbnail side.
+	inlineThumbnailSide = 320
 )
 
 // documentClass is the fixed preview layout: the standalone class crops
@@ -113,9 +116,12 @@ func DefaultPreamble() string {
 // Result carries the compiled output. JPEG is used for URL-based Telegram
 // inline photos, while PNG is used for direct chat replies.
 type Result struct {
-	PNG  []byte
-	JPEG []byte
-	PDF  []byte
+	PNG        []byte
+	JPEG       []byte
+	JPEGWidth  int
+	JPEGHeight int
+	Thumbnail  []byte
+	PDF        []byte
 }
 
 // LatexError wraps a LaTeX compile failure and carries the log excerpt shown
@@ -193,11 +199,12 @@ const (
 	FormatPNG Formats = 1 << iota
 	FormatJPEG
 	FormatPDF
+	FormatThumbnail
 )
 
 // Render compiles the expression and produces every format.
 func (r *Renderer) Render(ctx context.Context, preamble, expression string, dpi int) (*Result, error) {
-	return r.RenderFormats(ctx, preamble, expression, dpi, FormatPNG|FormatJPEG|FormatPDF)
+	return r.RenderFormats(ctx, preamble, expression, dpi, FormatPNG|FormatJPEG|FormatPDF|FormatThumbnail)
 }
 
 // RenderFormats compiles the expression inside the given preamble and
@@ -316,9 +323,23 @@ func (r *Renderer) RenderFormats(ctx context.Context, preamble, expression strin
 		if err := r.renderRaster(ctx, workdir, dpi, pdfPath, jpegPath, "jpeg"); err != nil {
 			return nil, err
 		}
+		result.JPEGWidth, result.JPEGHeight, err = imageSize(jpegPath)
+		if err != nil {
+			return nil, fmt.Errorf("inspect rendered jpeg: %w", err)
+		}
 		result.JPEG, err = os.ReadFile(jpegPath)
 		if err != nil {
 			return nil, fmt.Errorf("read rendered jpeg: %w", err)
+		}
+	}
+	if formats&FormatThumbnail != 0 {
+		thumbnailPath := filepath.Join(workdir, "document-thumb.jpg")
+		if err := r.renderThumbnail(ctx, workdir, dpi, pdfPath, thumbnailPath); err != nil {
+			return nil, err
+		}
+		result.Thumbnail, err = os.ReadFile(thumbnailPath)
+		if err != nil {
+			return nil, fmt.Errorf("read rendered thumbnail: %w", err)
 		}
 	}
 	return result, nil
@@ -331,6 +352,12 @@ func (r *Renderer) RenderFormats(ctx context.Context, preamble, expression strin
 func (r *Renderer) renderRaster(ctx context.Context, workdir string, dpi int, pdfPath, outPath, format string) error {
 	base := filepath.Join(workdir, "document")
 	args := []string{"-" + format, "-r", strconv.Itoa(dpi), "-singlefile", "-f", "1", "-l", "1"}
+	if format == "jpeg" {
+		// Baseline JPEGs avoid partial/progressive decode artifacts in some
+		// Telegram clients while remaining comfortably below the 5 MB inline
+		// photo limit for normal formula renders.
+		args = append(args, "-jpegopt", "quality=90,progressive=n,optimize=y")
+	}
 	if err := r.run(ctx, workdir, r.Pdftoppm, append(args, pdfPath, base)...); err != nil {
 		return err
 	}
@@ -354,6 +381,30 @@ func (r *Renderer) renderRaster(ctx context.Context, workdir string, dpi int, pd
 	args = append(args,
 		"-scale-to-x", strconv.Itoa(scaledWidth), "-scale-to-y", "-1")
 	return r.run(ctx, workdir, r.Pdftoppm, append(args, pdfPath, base)...)
+}
+
+// renderThumbnail creates the dedicated small JPEG used only by Telegram's
+// inline-result picker. Reusing the full-resolution photo URL as its thumbnail
+// can leave clients displaying a 320-pixel partial decode over the full photo
+// canvas even though the downloaded media itself is intact.
+func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int, pdfPath, outPath string) error {
+	base := strings.TrimSuffix(outPath, filepath.Ext(outPath))
+	args := []string{
+		"-jpeg", "-jpegopt", "quality=82,progressive=n,optimize=y",
+		"-r", strconv.Itoa(dpi), "-singlefile", "-f", "1", "-l", "1",
+		"-scale-to", strconv.Itoa(inlineThumbnailSide), pdfPath, base,
+	}
+	if err := r.run(ctx, workdir, r.Pdftoppm, args...); err != nil {
+		return fmt.Errorf("render inline thumbnail: %w", err)
+	}
+	width, height, err := imageSize(outPath)
+	if err != nil {
+		return fmt.Errorf("inspect inline thumbnail: %w", err)
+	}
+	if width > inlineThumbnailSide || height > inlineThumbnailSide {
+		return fmt.Errorf("inline thumbnail is unexpectedly large: %dx%d", width, height)
+	}
+	return nil
 }
 
 func imageSize(path string) (int, int, error) {

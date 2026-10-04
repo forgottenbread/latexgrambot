@@ -39,7 +39,7 @@ const (
 
 	// Included in content hashes so renderer/template changes never reuse
 	// stale Telegram file_ids or S3 objects from an older deployment.
-	renderCacheVersion = "presigned-v1"
+	renderCacheVersion = "presigned-v2-inline-thumbnail"
 )
 
 // outputFormat is one of the three generation formats.
@@ -130,9 +130,12 @@ type refsEntry struct {
 // urlEntry caches the presigned URLs of a recent render so repeated
 // identical inline queries skip rendering and uploading again.
 type urlEntry struct {
-	photoURL string
-	pdfURL   string
-	expires  time.Time
+	photoURL     string
+	thumbnailURL string
+	photoWidth   int
+	photoHeight  int
+	pdfURL       string
+	expires      time.Time
 }
 
 // New authenticates the bot and instruments its HTTP client.
@@ -480,7 +483,7 @@ func (b *Bot) savePhotoID(hash, fileID string) {
 	if b.cache == nil {
 		return
 	}
-	b.savePhotoID(hash, fileID)
+	b.cache.SavePhotoID(hash, fileID)
 	b.refsMu.Lock()
 	entry := b.refsCache[hash]
 	entry.refs.PhotoID = fileID
@@ -493,7 +496,7 @@ func (b *Bot) saveDocID(hash, fileID string) {
 	if b.cache == nil {
 		return
 	}
-	b.saveDocID(hash, fileID)
+	b.cache.SaveDocID(hash, fileID)
 	b.refsMu.Lock()
 	entry := b.refsCache[hash]
 	entry.refs.DocID = fileID
@@ -502,28 +505,29 @@ func (b *Bot) saveDocID(hash, fileID string) {
 	b.refsMu.Unlock()
 }
 
-// cachedURLs returns the presigned URLs of a recent render of the same
-// content, so repeated identical queries skip render and upload entirely.
-func (b *Bot) cachedURLs(hash string) (photoURL, pdfURL string, ok bool) {
+// cachedURLs returns the presigned URLs and photo geometry of a recent render
+// of the same content, so repeated identical queries skip render and upload.
+func (b *Bot) cachedURLs(hash string) (urlEntry, bool) {
 	b.urlsMu.Lock()
 	defer b.urlsMu.Unlock()
 	entry, found := b.urlsCache[hash]
 	if !found || time.Now().After(entry.expires) {
-		return "", "", false
+		return urlEntry{}, false
 	}
-	return entry.photoURL, entry.pdfURL, true
+	return entry, true
 }
 
-func (b *Bot) cacheURLs(hash, photoURL, pdfURL string) {
+func (b *Bot) cacheURLs(hash string, entry urlEntry) {
 	ttl := b.cfg.S3PresignTTL - 10*time.Minute
 	if ttl < 5*time.Minute {
 		ttl = 5 * time.Minute
 	}
+	entry.expires = time.Now().Add(ttl)
 	b.urlsMu.Lock()
 	if b.urlsCache == nil {
 		b.urlsCache = map[string]urlEntry{}
 	}
-	b.urlsCache[hash] = urlEntry{photoURL: photoURL, pdfURL: pdfURL, expires: time.Now().Add(ttl)}
+	b.urlsCache[hash] = entry
 	b.urlsMu.Unlock()
 }
 
@@ -557,18 +561,30 @@ func (b *Bot) inlineResults(ctx context.Context, query *tgbotapi.InlineQuery) []
 	refs := b.fileRefs(hash)
 	needPhoto := refs.PhotoID == ""
 	needDoc := refs.DocID == ""
-	var photoURL, pdfURL string
+	var urls urlEntry
 	if needPhoto || needDoc {
-		if cachedPhoto, cachedPDF, ok := b.cachedURLs(hash); ok {
-			photoURL, pdfURL = cachedPhoto, cachedPDF
-			needPhoto, needDoc = false, false
+		if cached, ok := b.cachedURLs(hash); ok {
+			urls = cached
+			if cached.photoURL != "" && cached.thumbnailURL != "" {
+				needPhoto = false
+			}
+			if cached.pdfURL != "" {
+				needDoc = false
+			}
 		}
 	}
 	if b.files != nil && (needPhoto || needDoc) {
 		renderCtx, cancel := context.WithTimeout(ctx, b.cfg.RenderTimeout)
 		defer cancel()
 		started := time.Now()
-		result, err := b.ren.RenderFormats(renderCtx, settings.Preamble, expr, dpi, render.FormatJPEG|render.FormatPDF)
+		var formats render.Formats
+		if needPhoto {
+			formats |= render.FormatJPEG | render.FormatThumbnail
+		}
+		if needDoc {
+			formats |= render.FormatPDF
+		}
+		result, err := b.ren.RenderFormats(renderCtx, settings.Preamble, expr, dpi, formats)
 		stat := store.RenderStat{
 			Source: "inline", Format: "inline", UserID: query.From.ID,
 			DPI: dpi, ExpressionLen: len(expr), OK: err == nil,
@@ -581,12 +597,13 @@ func (b *Bot) inlineResults(ctx context.Context, query *tgbotapi.InlineQuery) []
 		}
 		go b.rec.RecordRender(stat)
 
-		// Upload both formats concurrently: each Put is an object store
-		// round-trip.
+		// Upload the requested formats concurrently: each Put is an object
+		// store round-trip. A photo is only offered if both its full image and
+		// its dedicated thumbnail were stored successfully.
 		var wg sync.WaitGroup
-		var photoPutURL, pdfPutURL string
+		var photoPutURL, thumbnailPutURL, pdfPutURL string
 		if needPhoto {
-			wg.Add(1)
+			wg.Add(2)
 			go func() {
 				defer wg.Done()
 				storedURL, putErr := b.files.Put(ctx, "jpg", "image/jpeg", result.JPEG)
@@ -595,6 +612,15 @@ func (b *Bot) inlineResults(ctx context.Context, query *tgbotapi.InlineQuery) []
 					return
 				}
 				photoPutURL = storedURL
+			}()
+			go func() {
+				defer wg.Done()
+				storedURL, putErr := b.files.Put(ctx, "thumb.jpg", "image/jpeg", result.Thumbnail)
+				if putErr != nil {
+					log.Printf("store inline thumbnail: %v", putErr)
+					return
+				}
+				thumbnailPutURL = storedURL
 			}()
 		}
 		if needDoc {
@@ -610,14 +636,17 @@ func (b *Bot) inlineResults(ctx context.Context, query *tgbotapi.InlineQuery) []
 			}()
 		}
 		wg.Wait()
-		if photoPutURL != "" {
-			photoURL = photoPutURL
+		if photoPutURL != "" && thumbnailPutURL != "" {
+			urls.photoURL = photoPutURL
+			urls.thumbnailURL = thumbnailPutURL
+			urls.photoWidth = result.JPEGWidth
+			urls.photoHeight = result.JPEGHeight
 		}
 		if pdfPutURL != "" {
-			pdfURL = pdfPutURL
+			urls.pdfURL = pdfPutURL
 		}
-		if photoPutURL != "" || pdfPutURL != "" {
-			b.cacheURLs(hash, photoURL, pdfURL)
+		if urls.photoURL != "" || urls.pdfURL != "" {
+			b.cacheURLs(hash, urls)
 		}
 	}
 
@@ -626,18 +655,23 @@ func (b *Bot) inlineResults(ctx context.Context, query *tgbotapi.InlineQuery) []
 		photo := tgbotapi.NewInlineQueryResultCachedPhoto("photo-"+id, refs.PhotoID)
 		photo.Title = "PNG"
 		results = append(results, photo)
-	} else if photoURL != "" {
-		photo := tgbotapi.NewInlineQueryResultPhoto("photo-"+id, photoURL)
-		photo.ThumbURL = photoURL
-		photo.Title = "PNG"
-		results = append(results, photo)
+	} else if urls.photoURL != "" && urls.thumbnailURL != "" {
+		results = append(results, inlineQueryResultPhoto{
+			Type:         "photo",
+			ID:           "photo-" + id,
+			PhotoURL:     urls.photoURL,
+			ThumbnailURL: urls.thumbnailURL,
+			PhotoWidth:   urls.photoWidth,
+			PhotoHeight:  urls.photoHeight,
+			Title:        "PNG",
+		})
 	}
 	if refs.DocID != "" {
 		document := tgbotapi.NewInlineQueryResultCachedDocument("doc-"+id, refs.DocID, "PDF")
 		document.Title = "PDF"
 		results = append(results, document)
-	} else if pdfURL != "" {
-		document := tgbotapi.NewInlineQueryResultDocument("doc-"+id, pdfURL, "formula.pdf", "application/pdf")
+	} else if urls.pdfURL != "" {
+		document := tgbotapi.NewInlineQueryResultDocument("doc-"+id, urls.pdfURL, "formula.pdf", "application/pdf")
 		document.Title = "PDF"
 		results = append(results, document)
 	}
@@ -666,6 +700,18 @@ func (b *Bot) richTextResult(id, expression string) interface{} {
 // used as inline input_message_content.
 type inputRichMessageContent struct {
 	RichMessage *rich.Message `json:"rich_message"`
+}
+
+// inlineQueryResultPhoto follows the current Bot API field names. The pinned
+// Telegram library predates thumbnail_url and still serializes thumb_url.
+type inlineQueryResultPhoto struct {
+	Type         string `json:"type"`
+	ID           string `json:"id"`
+	PhotoURL     string `json:"photo_url"`
+	ThumbnailURL string `json:"thumbnail_url"`
+	PhotoWidth   int    `json:"photo_width,omitempty"`
+	PhotoHeight  int    `json:"photo_height,omitempty"`
+	Title        string `json:"title,omitempty"`
 }
 
 // sendPhoto sends a rendered picture to the chat and returns its reusable
