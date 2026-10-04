@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"image"
+	"image/color"
+	"image/draw"
 	_ "image/png"
 	"os/exec"
 	"strings"
@@ -121,8 +123,8 @@ func TestRenderIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode thumbnail size: %v", err)
 	}
-	if thumbWidth > inlineThumbnailSide || thumbHeight > inlineThumbnailSide {
-		t.Errorf("thumbnail is %dx%d, want each side <= %d", thumbWidth, thumbHeight, inlineThumbnailSide)
+	if thumbWidth != inlineThumbnailSide || thumbHeight != inlineThumbnailSide {
+		t.Errorf("thumbnail is %dx%d, want a %dx%d padded square", thumbWidth, thumbHeight, inlineThumbnailSide, inlineThumbnailSide)
 	}
 
 	linked, err := r.Render(ctx, "", `\hypertarget{details}{Details}\par\hyperlink{details}{Go to details}`, 150)
@@ -131,6 +133,29 @@ func TestRenderIntegration(t *testing.T) {
 	}
 	if len(linked.PDF) == 0 || len(linked.PNG) == 0 || len(linked.JPEG) == 0 || len(linked.Thumbnail) == 0 {
 		t.Fatal("hyperlink render returned an empty format")
+	}
+}
+
+func TestSquareThumbnailPadsWithoutStretching(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 160, 80))
+	draw.Draw(source, source.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
+
+	thumbnail := squareThumbnail(source)
+	if thumbnail.Bounds() != image.Rect(0, 0, inlineThumbnailSide, inlineThumbnailSide) {
+		t.Fatalf("thumbnail bounds = %v", thumbnail.Bounds())
+	}
+	for _, sample := range []struct {
+		point image.Point
+		want  color.RGBA
+	}{
+		{image.Pt(160, 119), color.RGBA{255, 255, 255, 255}},
+		{image.Pt(160, 120), color.RGBA{0, 0, 0, 255}},
+		{image.Pt(79, 160), color.RGBA{255, 255, 255, 255}},
+		{image.Pt(80, 160), color.RGBA{0, 0, 0, 255}},
+	} {
+		if got := thumbnail.RGBAAt(sample.point.X, sample.point.Y); got != sample.want {
+			t.Errorf("pixel at %v = %v, want %v", sample.point, got, sample.want)
+		}
 	}
 }
 
