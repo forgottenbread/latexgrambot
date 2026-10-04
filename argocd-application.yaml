@@ -1,0 +1,41 @@
+# Optional: GitOps deployment with Argo CD. Point repoURL at your fork,
+# adjust the project and the destination namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: latexgrambot
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/your-org/latexgrambot.git
+    targetRevision: main
+    path: k8s
+    directory:
+      recurse: false
+      # secret.example.yaml is intentionally excluded: the Telegram token
+      # and the S3 credentials are applied manually and must never reach
+      # the repository.
+      include: '{configmap.yaml,deployment.yaml,service.yaml}'
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: latexgrambot
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

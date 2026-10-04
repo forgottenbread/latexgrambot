@@ -1,0 +1,37 @@
+# Minimal self-hosted stack: MongoDB plus the bot.
+#
+#   TELEGRAM_BOT_TOKEN=123:abc docker compose up --build
+#
+# Inline picture/PDF results need an S3-compatible bucket; without one the
+# bot still serves rich text and the chat-mode PNG/PDF commands.
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+
+  latexgrambot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "8080:8080"
+    environment:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}"
+      MONGODB_URI: "mongodb://mongo:27017"
+      MONGODB_DATABASE: "latexgram"
+      # Optional inline assets (S3-compatible, public endpoint reachable by
+      # Telegram):
+      # S3_ENDPOINT_URL: "http://minio:9000"
+      # S3_REGION: "us-east-1"
+      # S3_BUCKET: "latexgrambot"
+      # S3_PREFIX: "content"
+      # S3_PUBLIC_ENDPOINT_URL: "https://s3.example.com"
+      # S3_PRESIGN_TTL: "1h"
+      # AWS_ACCESS_KEY_ID: ""
+      # AWS_SECRET_ACCESS_KEY: ""
+
+volumes:
+  mongo-data:

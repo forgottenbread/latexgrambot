@@ -1,0 +1,5 @@
+.git
+.cache
+README.md
+k8s
+argocd-application.yaml

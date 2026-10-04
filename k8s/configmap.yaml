@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: latexgrambot
+  namespace: latexgrambot
+  labels:
+    app.kubernetes.io/name: latexgrambot
+data:
+  HEALTH_ADDR: ":8080"
+
+  # MongoDB is the only hard dependency: per-chat settings, users, group
+  # memberships, render statistics and the inline file-id cache live there.
+  MONGODB_URI: "mongodb://mongo:27017"
+  MONGODB_DATABASE: "latexgram"
+
+  # Private S3-compatible bucket for the inline PNG/PDF assets. Telegram
+  # receives short-lived presigned GET URLs, so the public endpoint must be
+  # reachable from the internet. Credentials come from the
+  # latexgrambot-s3 secret. Leave all S3 values empty to disable the inline
+  # picture/PDF results (rich text still works).
+  S3_ENDPOINT_URL: "http://minio:9000"
+  S3_REGION: "us-east-1"
+  S3_BUCKET: "latexgrambot"
+  S3_PREFIX: "content"
+  S3_PUBLIC_ENDPOINT_URL: "https://s3.example.com"
+  S3_PRESIGN_TTL: "1h"
+
+  # Preloaded TeX format shipped in the image: skips re-loading the default
+  # package set on every render.
+  LATEX_FORMAT: "latexgrambot"
+
+  RENDER_DPI: "600"
+  RENDER_TIMEOUT: "30s"
+  RENDER_MAX_CONCURRENCY: "2"
+  MAX_EXPRESSION_LEN: "4000"
+  MAX_PREAMBLE_LEN: "4000"
+
+  # Rich message replies (Bot API 10.x). Set to false for older Bot API
+  # servers; chat and inline fall back to PNG/PDF only.
+  RICH_TEXT_ENABLED: "true"
+  # A bare source without delimiters/text commands renders as math (true)
+  # or as text (false, formulas then need $...$).
+  RICH_DEFAULT_MATH: "true"
+
+  # OpenTelemetry traces (OTLP gRPC). Leave the endpoint empty to disable.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_INSECURE: "true"
+  OTEL_SERVICE_NAME: "latexgrambot"

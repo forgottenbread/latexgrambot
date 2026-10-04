@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latexgrambot
+  namespace: latexgrambot
+  labels:
+    app.kubernetes.io/name: latexgrambot
+spec:
+  # Exactly one replica: the bot long-polls Telegram (getUpdates) and
+  # Telegram allows a single consumer per bot token.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: latexgrambot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: latexgrambot
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: latexgrambot
+          # Replace with the image built by CI, e.g. your registry plus the
+          # commit SHA tag.
+          image: latexgrambot:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: latexgrambot
+            - secretRef:
+                name: latexgrambot-secrets
+            - secretRef:
+                name: latexgrambot-s3
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          # pdflatex is CPU-bound; the memory limit has to cover a TeX Live
+          # run (a few hundred MB per concurrent render).
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
