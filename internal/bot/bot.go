@@ -39,7 +39,7 @@ const (
 
 	// Included in content hashes so renderer/template changes never reuse
 	// stale Telegram file_ids or S3 objects from an older deployment.
-	renderCacheVersion = "presigned-v3-square-thumbnail"
+	renderCacheVersion = "presigned-v4-rich-environments"
 )
 
 // outputFormat is one of the three generation formats.

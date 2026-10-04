@@ -105,7 +105,7 @@ var wrapperEnvironments = map[string]bool{
 // source in math mode.
 var mathEnvironments = map[string]bool{
 	"equation": true, "equation*": true, "align": true, "align*": true,
-	"aligned": true, "gather": true, "gather*": true, "multline": true,
+	"aligned": true, "gather": true, "gather*": true, "gathered": true, "multline": true,
 	"multline*": true, "eqnarray": true, "eqnarray*": true, "array": true,
 	"matrix": true, "pmatrix": true, "bmatrix": true, "vmatrix": true,
 	"Vmatrix": true, "Bmatrix": true, "cases": true, "split": true,
@@ -177,7 +177,11 @@ func Document(source string, defaultMath bool) *Message {
 	if trimmed == "" {
 		return &Message{Blocks: []Block{{Type: "paragraph", Text: " "}}}
 	}
-	if defaultMath && isPureMath(trimmed) {
+	// Math environments need block-aware parsing even when the whole source is
+	// mathematical. Document-level environments such as gather and align are
+	// not understood reliably by Telegram's native math renderer; parseBlocks
+	// unwraps or splits them into expressions it can render.
+	if defaultMath && len(environmentsIn(trimmed)) == 0 && isPureMath(trimmed) {
 		if isSymbolsOnly(trimmed) {
 			// Client math fonts often lack exotic symbols; the regular
 			// text font renders them everywhere.
@@ -585,7 +589,23 @@ func (p *parser) parseBlocks() []Block {
 			for p.pos < len(p.src) && (p.src[p.pos] == ' ' || p.src[p.pos] == '\t') {
 				p.pos++
 			}
-		case p.startsWith(`\begin{`), p.startsWith(`\end{`):
+		case p.startsWith(`\begin{`):
+			environment, body, after, ok := readCompleteEnvironment(p.src, p.pos)
+			if ok && mathEnvironments[environment] {
+				flush()
+				blocks = appendMathEnvironment(blocks, environment, body)
+				p.pos = after
+				continue
+			}
+			environment, after, markerOK := readEnvironment(p.src, p.pos)
+			if markerOK && wrapperEnvironments[environment] {
+				flush()
+				p.pos = after
+			} else {
+				text.WriteByte(p.src[p.pos])
+				p.pos++
+			}
+		case p.startsWith(`\end{`):
 			environment, after, ok := readEnvironment(p.src, p.pos)
 			if ok && wrapperEnvironments[environment] {
 				flush()
@@ -613,6 +633,211 @@ func (p *parser) parseBlocks() []Block {
 	}
 	flush()
 	return blocks
+}
+
+// readCompleteEnvironment reads a balanced environment beginning at index.
+// Nested environments are kept in body and cannot terminate the outer one.
+func readCompleteEnvironment(source string, index int) (name, body string, after int, ok bool) {
+	if !strings.HasPrefix(source[index:], `\begin{`) {
+		return "", "", index, false
+	}
+	name, bodyStart, ok := readEnvironment(source, index)
+	if !ok {
+		return "", "", index, false
+	}
+	stack := []string{name}
+	for position := bodyStart; position < len(source); {
+		beginOffset := strings.Index(source[position:], `\begin{`)
+		endOffset := strings.Index(source[position:], `\end{`)
+		if beginOffset < 0 && endOffset < 0 {
+			break
+		}
+		isBegin := beginOffset >= 0 && (endOffset < 0 || beginOffset < endOffset)
+		offset := endOffset
+		if isBegin {
+			offset = beginOffset
+		}
+		markerStart := position + offset
+		environment, markerAfter, markerOK := readEnvironment(source, markerStart)
+		if !markerOK {
+			position = markerStart + 1
+			continue
+		}
+		if isBegin {
+			stack = append(stack, environment)
+		} else {
+			if len(stack) == 0 || stack[len(stack)-1] != environment {
+				return "", "", index, false
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return name, source[bodyStart:markerStart], markerAfter, true
+			}
+		}
+		position = markerAfter
+	}
+	return "", "", index, false
+}
+
+func appendMathEnvironment(blocks []Block, environment, body string) []Block {
+	rowEnvironment := false
+	removeAlignment := false
+	switch environment {
+	case "gather", "gather*", "multline", "multline*":
+		rowEnvironment = true
+	case "align", "align*", "eqnarray", "eqnarray*":
+		rowEnvironment = true
+		removeAlignment = true
+	case "equation", "equation*", "displaymath", "math":
+		return appendMathBlock(blocks, body)
+	default:
+		// Matrix-like environments carry semantics in their wrapper, so keep
+		// the complete environment inside a single native math expression.
+		return appendMathBlock(blocks, `\begin{`+environment+`}`+body+`\end{`+environment+`}`)
+	}
+
+	if !rowEnvironment {
+		return blocks
+	}
+	for _, row := range splitMathRows(body) {
+		if removeAlignment {
+			row = removeMathAlignmentMarks(row)
+		}
+		blocks = appendMathBlock(blocks, row)
+	}
+	return blocks
+}
+
+func appendMathBlock(blocks []Block, expression string) []Block {
+	expression = strings.TrimSpace(expression)
+	if expression == "" {
+		return blocks
+	}
+	if isSymbolsOnly(expression) {
+		return append(blocks, Block{Type: "paragraph", Text: expression})
+	}
+	return append(blocks, Block{Type: "mathematical_expression", Expression: expression})
+}
+
+// splitMathRows splits document-level display environments at top-level \\.
+// Row separators inside groups or nested matrix-like environments are kept.
+func splitMathRows(source string) []string {
+	var rows []string
+	start := 0
+	braceDepth := 0
+	environmentDepth := 0
+	for index := 0; index < len(source); {
+		switch source[index] {
+		case '\\':
+			if strings.HasPrefix(source[index:], `\begin{`) {
+				_, after, ok := readEnvironment(source, index)
+				if ok {
+					environmentDepth++
+					index = after
+					continue
+				}
+			}
+			if strings.HasPrefix(source[index:], `\end{`) {
+				_, after, ok := readEnvironment(source, index)
+				if ok {
+					if environmentDepth > 0 {
+						environmentDepth--
+					}
+					index = after
+					continue
+				}
+			}
+			if strings.HasPrefix(source[index:], `\\`) && braceDepth == 0 && environmentDepth == 0 {
+				rows = append(rows, source[start:index])
+				index += 2
+				if index < len(source) && source[index] == '*' {
+					index++
+				}
+				index = skipOptionalBracket(source, index)
+				start = index
+				continue
+			}
+			_, next := readCommand(source, index)
+			index = next
+		case '{':
+			braceDepth++
+			index++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			index++
+		default:
+			index++
+		}
+	}
+	rows = append(rows, source[start:])
+	return rows
+}
+
+func skipOptionalBracket(source string, index int) int {
+	for index < len(source) && (source[index] == ' ' || source[index] == '\t') {
+		index++
+	}
+	if index >= len(source) || source[index] != '[' {
+		return index
+	}
+	for index++; index < len(source); index++ {
+		switch source[index] {
+		case '\\':
+			index++
+		case ']':
+			return index + 1
+		}
+	}
+	return index
+}
+
+func removeMathAlignmentMarks(source string) string {
+	var result strings.Builder
+	braceDepth := 0
+	environmentDepth := 0
+	for index := 0; index < len(source); {
+		if source[index] == '\\' {
+			if strings.HasPrefix(source[index:], `\begin{`) {
+				_, next, ok := readEnvironment(source, index)
+				if ok {
+					environmentDepth++
+					result.WriteString(source[index:next])
+					index = next
+					continue
+				}
+			}
+			if strings.HasPrefix(source[index:], `\end{`) {
+				_, next, ok := readEnvironment(source, index)
+				if ok {
+					if environmentDepth > 0 {
+						environmentDepth--
+					}
+					result.WriteString(source[index:next])
+					index = next
+					continue
+				}
+			}
+			_, next := readCommand(source, index)
+			result.WriteString(source[index:next])
+			index = next
+			continue
+		}
+		switch source[index] {
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		}
+		if source[index] != '&' || braceDepth > 0 || environmentDepth > 0 {
+			result.WriteByte(source[index])
+		}
+		index++
+	}
+	return result.String()
 }
 
 // leadingSizeDeclaration strips a declaration-style font-size command at the

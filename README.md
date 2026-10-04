@@ -1,3 +1,9 @@
+<!-- gitea-mirror-notice:start -->
+> [!IMPORTANT]
+> **This GitHub repository is a mirror.**  
+> The canonical public repository is [https://git.mulas.me/corrado/latexgrambot](https://git.mulas.me/corrado/latexgrambot).
+<!-- gitea-mirror-notice:end -->
+
 # latexgrambot
 
 Inline LaTeX bot for Telegram, written in Go. 

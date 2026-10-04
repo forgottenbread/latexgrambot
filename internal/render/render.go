@@ -9,9 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
-	"image/draw"
-	"image/jpeg"
+	_ "image/jpeg"
 	_ "image/png"
 	"math"
 	"os"
@@ -386,12 +384,10 @@ func (r *Renderer) renderRaster(ctx context.Context, workdir string, dpi int, pd
 }
 
 // renderThumbnail creates the dedicated small JPEG used only by Telegram's
-// inline-result picker. It centers the aspect-correct preview on a square
-// canvas because some clients force inline thumbnails into a square slot.
-// Supplying the rectangular preview directly makes those clients stretch it.
+// inline-result picker. It preserves the formula's aspect ratio and only
+// shrinks oversized previews; short expressions are never enlarged.
 func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int, pdfPath, outPath string) error {
-	base := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "-source"
-	sourcePath := base + ".jpg"
+	base := strings.TrimSuffix(outPath, filepath.Ext(outPath))
 	args := []string{
 		"-jpeg", "-jpegopt", "quality=82,progressive=n,optimize=y",
 		"-r", strconv.Itoa(dpi), "-singlefile", "-f", "1", "-l", "1",
@@ -399,7 +395,7 @@ func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int,
 	if err := r.run(ctx, workdir, r.Pdftoppm, append(args, pdfPath, base)...); err != nil {
 		return fmt.Errorf("render inline thumbnail: %w", err)
 	}
-	width, height, err := imageSize(sourcePath)
+	width, height, err := imageSize(outPath)
 	if err != nil {
 		return fmt.Errorf("inspect inline thumbnail: %w", err)
 	}
@@ -410,7 +406,7 @@ func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int,
 		if err := r.run(ctx, workdir, r.Pdftoppm, append(scaledArgs, pdfPath, base)...); err != nil {
 			return fmt.Errorf("scale inline thumbnail: %w", err)
 		}
-		width, height, err = imageSize(sourcePath)
+		width, height, err = imageSize(outPath)
 		if err != nil {
 			return fmt.Errorf("inspect scaled inline thumbnail: %w", err)
 		}
@@ -418,36 +414,7 @@ func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int,
 	if width > inlineThumbnailSide || height > inlineThumbnailSide {
 		return fmt.Errorf("inline thumbnail is unexpectedly large: %dx%d", width, height)
 	}
-
-	sourceData, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return fmt.Errorf("read inline thumbnail: %w", err)
-	}
-	source, err := jpeg.Decode(bytes.NewReader(sourceData))
-	if err != nil {
-		return fmt.Errorf("decode inline thumbnail: %w", err)
-	}
-	thumbnail := squareThumbnail(source)
-	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, thumbnail, &jpeg.Options{Quality: 82}); err != nil {
-		return fmt.Errorf("encode inline thumbnail: %w", err)
-	}
-	if err := os.WriteFile(outPath, encoded.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("write inline thumbnail: %w", err)
-	}
 	return nil
-}
-
-// squareThumbnail pads rather than stretches the already-scaled preview.
-func squareThumbnail(source image.Image) *image.RGBA {
-	canvas := image.NewRGBA(image.Rect(0, 0, inlineThumbnailSide, inlineThumbnailSide))
-	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	bounds := source.Bounds()
-	x := (inlineThumbnailSide - bounds.Dx()) / 2
-	y := (inlineThumbnailSide - bounds.Dy()) / 2
-	target := image.Rect(x, y, x+bounds.Dx(), y+bounds.Dy())
-	draw.Draw(canvas, target, source, bounds.Min, draw.Src)
-	return canvas
 }
 
 func imageSize(path string) (int, int, error) {

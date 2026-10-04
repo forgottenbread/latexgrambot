@@ -36,6 +36,67 @@ func TestDocumentDisplayMath(t *testing.T) {
 	}
 }
 
+func TestDocumentMixedTextAndGather(t *testing.T) {
+	source := `Expand $(a+b)^n$:
+\begin{gather*}
+  (a + b)^n\\
+  (a\ + \ b)^n\\
+  (a\quad + \quad b)^n\\
+  (a\qquad + \qquad b)^n
+\end{gather*}`
+	message := Document(source, false)
+	if len(message.Blocks) != 5 {
+		t.Fatalf("blocks = %+v", message.Blocks)
+	}
+	parts, ok := message.Blocks[0].Text.([]any)
+	if !ok || len(parts) != 3 || parts[0] != "Expand " || parts[2] != ":" {
+		t.Fatalf("intro = %#v", message.Blocks[0].Text)
+	}
+	inline, ok := parts[1].(Inline)
+	if !ok || inline.Type != "mathematical_expression" || inline.Expression != `(a+b)^n` {
+		t.Fatalf("inline math = %#v", parts[1])
+	}
+	want := []string{
+		`(a + b)^n`,
+		`(a\ + \ b)^n`,
+		`(a\quad + \quad b)^n`,
+		`(a\qquad + \qquad b)^n`,
+	}
+	for index, expression := range want {
+		block := message.Blocks[index+1]
+		if block.Type != "mathematical_expression" || block.Expression != expression {
+			t.Errorf("row %d = %+v, want %q", index, block, expression)
+		}
+	}
+}
+
+func TestDocumentMathEnvironmentRowsPreserveNestedEnvironments(t *testing.T) {
+	source := `\begin{align*}
+  A &= \begin{matrix} a & b \\ c & d \end{matrix}\\[1ex]
+  x &\leq y
+\end{align*}`
+	message := Document(source, true)
+	if len(message.Blocks) != 2 {
+		t.Fatalf("blocks = %+v", message.Blocks)
+	}
+	if got := message.Blocks[0].Expression; got != `A = \begin{matrix} a & b \\ c & d \end{matrix}` {
+		t.Errorf("first row = %q", got)
+	}
+	if got := message.Blocks[1].Expression; got != `x \leq y` {
+		t.Errorf("second row = %q", got)
+	}
+}
+
+func TestDocumentMatrixEnvironmentStaysWrapped(t *testing.T) {
+	message := Document(`\begin{pmatrix} a & b \\ c & d \end{pmatrix}`, true)
+	if len(message.Blocks) != 1 || message.Blocks[0].Type != "mathematical_expression" {
+		t.Fatalf("blocks = %+v", message.Blocks)
+	}
+	if got := message.Blocks[0].Expression; got != `\begin{pmatrix} a & b \\ c & d \end{pmatrix}` {
+		t.Fatalf("expression = %q", got)
+	}
+}
+
 func TestDocumentTextFormatting(t *testing.T) {
 	message := Document(`Hello \textbf{world} and \emph{italics}`, true)
 	if len(message.Blocks) != 1 {
@@ -468,12 +529,16 @@ func TestInlineDocumentTextDefault(t *testing.T) {
 func TestDocumentBareMathCommands(t *testing.T) {
 	for _, source := range []string{
 		`\frac{1}{2}`,
-		`\begin{align} a &= b \\ c &= d \end{align}`,
 		`x = \text{hello}`,
 	} {
 		message := Document(source, true)
 		if len(message.Blocks) != 1 || message.Blocks[0].Type != "mathematical_expression" {
 			t.Errorf("source %q: blocks = %+v", source, message.Blocks)
 		}
+	}
+
+	message := Document(`\begin{align} a &= b \\ c &= d \end{align}`, true)
+	if len(message.Blocks) != 2 || message.Blocks[0].Expression != `a = b` || message.Blocks[1].Expression != `c = d` {
+		t.Errorf("align blocks = %+v", message.Blocks)
 	}
 }
