@@ -302,8 +302,6 @@ environment is available:
 - the S3 test needs `LATEXGRAMBOT_S3_TEST_ENDPOINT`,
   `LATEXGRAMBOT_S3_TEST_ACCESS_KEY` and `LATEXGRAMBOT_S3_TEST_SECRET_KEY`.
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the checks and
-builds the multiarch image.
 
 ## License
 
