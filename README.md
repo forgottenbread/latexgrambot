@@ -2,7 +2,9 @@
 
 Inline LaTeX bot for Telegram, written in Go. 
 
+<!-- ai-notice:start -->
 > [!IMPORTANT] **IMPORTANT NOTICE** This work has been made with an extra-supervised use of AI agents to perform the grunt work, with architectural choices strictly human-imposed. Has been successfully tested on a busy production environment, but in no case there is any guarantee nor I'm to be held liable of anything if you re-use this work.
+<!-- ai-notice:end -->
 
 
 ## Features
