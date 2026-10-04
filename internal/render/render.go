@@ -395,14 +395,25 @@ func (r *Renderer) renderThumbnail(ctx context.Context, workdir string, dpi int,
 	args := []string{
 		"-jpeg", "-jpegopt", "quality=82,progressive=n,optimize=y",
 		"-r", strconv.Itoa(dpi), "-singlefile", "-f", "1", "-l", "1",
-		"-scale-to", strconv.Itoa(inlineThumbnailSide), pdfPath, base,
 	}
-	if err := r.run(ctx, workdir, r.Pdftoppm, args...); err != nil {
+	if err := r.run(ctx, workdir, r.Pdftoppm, append(args, pdfPath, base)...); err != nil {
 		return fmt.Errorf("render inline thumbnail: %w", err)
 	}
 	width, height, err := imageSize(sourcePath)
 	if err != nil {
 		return fmt.Errorf("inspect inline thumbnail: %w", err)
+	}
+	// Only shrink oversized previews. pdftoppm's -scale-to also upscales
+	// small pages, which would unnecessarily enlarge short expressions.
+	if width > inlineThumbnailSide || height > inlineThumbnailSide {
+		scaledArgs := append(args, "-scale-to", strconv.Itoa(inlineThumbnailSide))
+		if err := r.run(ctx, workdir, r.Pdftoppm, append(scaledArgs, pdfPath, base)...); err != nil {
+			return fmt.Errorf("scale inline thumbnail: %w", err)
+		}
+		width, height, err = imageSize(sourcePath)
+		if err != nil {
+			return fmt.Errorf("inspect scaled inline thumbnail: %w", err)
+		}
 	}
 	if width > inlineThumbnailSide || height > inlineThumbnailSide {
 		return fmt.Errorf("inline thumbnail is unexpectedly large: %dx%d", width, height)
