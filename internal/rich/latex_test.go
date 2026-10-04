@@ -2,6 +2,7 @@ package rich
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,53 @@ func TestDocumentSections(t *testing.T) {
 	}
 	if message.Blocks[0].Text != "Intro" {
 		t.Fatalf("heading text = %#v", message.Blocks[0].Text)
+	}
+}
+
+func TestDocumentSizeDeclarations(t *testing.T) {
+	for source, wantSize := range map[string]int{
+		`\large GRANDE`:    5,
+		`\Large GRANDE`:    4,
+		`\LARGE GRANDE`:    3,
+		`\huge GRANDE`:     2,
+		`\Huge GRANDE`:     1,
+		`\Huge{GRANDE}`:    1,
+		`{\Huge GRANDE}`:   1,
+		`{ \Huge GRANDE }`: 1,
+	} {
+		message := Document(source, true)
+		if len(message.Blocks) != 1 {
+			t.Errorf("source %q: blocks = %+v", source, message.Blocks)
+			continue
+		}
+		block := message.Blocks[0]
+		if block.Type != "heading" || block.Size != wantSize || block.Text != "GRANDE" {
+			t.Errorf("source %q: block = %+v", source, block)
+		}
+		if IsMathExpression(source) {
+			t.Errorf("source %q classified as math", source)
+		}
+	}
+
+	for _, source := range []string{`\normalsize normal`, `\small small`, `\footnotesize footnote`, `\scriptsize script`, `\tiny tiny`} {
+		message := Document(source, true)
+		if len(message.Blocks) != 1 || message.Blocks[0].Type != "paragraph" {
+			t.Errorf("source %q: blocks = %+v", source, message.Blocks)
+		}
+		if strings.Contains(blockText(message.Blocks[0]), `\`) {
+			t.Errorf("source %q leaked its declaration: %+v", source, message.Blocks[0])
+		}
+	}
+}
+
+func TestDocumentHugeJSON(t *testing.T) {
+	data, err := json.Marshal(InlineDocument(`\Huge GRANDE`, true))
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"blocks":[{"type":"heading","text":"GRANDE","size":1}]}`
+	if string(data) != want {
+		t.Fatalf("unexpected JSON:\n got %s\nwant %s", data, want)
 	}
 }
 
@@ -237,9 +285,10 @@ func TestDocumentSymbolCommands(t *testing.T) {
 		t.Fatalf("text = %q", blockText(message.Blocks[0]))
 	}
 
-	// With surrounding letters it stays a math expression.
+	// With surrounding words it stays text; a translated symbol isn't a
+	// reason to guess that the whole sentence is math.
 	message = Document(`I \heartsuit{} you`, true)
-	if message.Blocks[0].Type != "mathematical_expression" || blockText(message.Blocks[0]) != "I ♡ you" {
+	if message.Blocks[0].Type != "paragraph" || blockText(message.Blocks[0]) != "I ♡ you" {
 		t.Fatalf("blocks = %+v", message.Blocks)
 	}
 
@@ -318,6 +367,32 @@ func TestIsMathExpression(t *testing.T) {
 		`\hyperlink{x}{go}`:                 false,
 		`\begin{itemize} \item a`:           false,
 		`\begin{itemize} \item $x$`:         false,
+	} {
+		if got := IsMathExpression(source); got != want {
+			t.Errorf("IsMathExpression(%q) = %v, want %v", source, got, want)
+		}
+	}
+}
+
+func TestIsMathExpressionConservative(t *testing.T) {
+	for source, want := range map[string]bool{
+		`\Huge GRANDE`:              false,
+		`\bfseries bold`:            false,
+		`\includegraphics{x.png}`:   false,
+		`\customtextmacro{content}`: false,
+		`Hello-world`:               false,
+		`https://example.com/a/b`:   false,
+		`plain words`:               false,
+		`x^2`:                       true,
+		`F = ma`:                    true,
+		`2 + 2`:                     true,
+		`a+b`:                       true,
+		`x + y + z`:                 true,
+		`x-y`:                       true,
+		`state-of-the-art`:          false,
+		`\frac{1}{2}`:               true,
+		`\alpha + \beta`:            true,
+		`\int_0^1 x\,dx`:            true,
 	} {
 		if got := IsMathExpression(source); got != want {
 			t.Errorf("IsMathExpression(%q) = %v, want %v", source, got, want)

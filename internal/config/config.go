@@ -36,9 +36,10 @@ type Config struct {
 	// back to PNG and PDF only.
 	RichTextEnabled bool
 
-	// RichDefaultMath controls how the rich format treats a bare source
-	// (no math delimiters, no text-mode command): true renders it as a math
-	// expression, false parses it as text so formulas need $...$ delimiters.
+	// RichDefaultMath controls how the rich format treats ambiguous bare
+	// source. It defaults to false so non-math LaTeX is never guessed to be
+	// math; formulas need explicit delimiters unless operators opt into the
+	// legacy behavior.
 	RichDefaultMath bool
 
 	RenderDPI      int
@@ -81,7 +82,7 @@ func Load() (*Config, error) {
 	if cfg.RichTextEnabled, err = getenvBool("RICH_TEXT_ENABLED", true); err != nil {
 		return nil, err
 	}
-	if cfg.RichDefaultMath, err = getenvBool("RICH_DEFAULT_MATH", true); err != nil {
+	if cfg.RichDefaultMath, err = getenvBool("RICH_DEFAULT_MATH", false); err != nil {
 		return nil, err
 	}
 	if cfg.RenderDPI, err = getenvInt("RENDER_DPI", 600); err != nil {

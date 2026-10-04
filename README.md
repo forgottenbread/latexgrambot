@@ -18,7 +18,9 @@ Inline LaTeX bot for Telegram, written in Go.
   the chat immediately.
 - **Rich text rendering**: replies are Telegram rich messages (Bot API 10.x
   `sendRichMessage`) whose `mathematical_expression` block is rendered
-  natively by the client. The raw source is never echoed.
+  natively by the client. Text formatting and the standard size declarations
+  (`\large` through `\Huge`) are converted to native rich blocks; ambiguous
+  bare input stays text by default. The raw source is never echoed.
 - **Full LaTeX**: a broad default package set (amsmath, mathtools, tikz,
   pgfplots, siunitx, mhchem, chemfig, braket, hyperref, ...) is preloaded
   into a TeX format at image build time, so any of it is available without
@@ -185,7 +187,7 @@ render.
 | `MAX_EXPRESSION_LEN` | `4000` | Max expression length in characters |
 | `MAX_PREAMBLE_LEN` | `4000` | Max preamble length in characters |
 | `RICH_TEXT_ENABLED` | `true` | Rich text replies (needs a Bot API 10.x server) |
-| `RICH_DEFAULT_MATH` | `true` | A bare source without delimiters/text commands renders as math; `false` parses it as text, so formulas need `$...$` |
+| `RICH_DEFAULT_MATH` | `false` | Parse ambiguous bare source as text; set `true` for legacy automatic bare-math detection |
 | `HEALTH_ADDR` | `:8080` | Health endpoint address |
 | `PDFLATEX_BIN` | `pdflatex` | pdflatex binary |
 | `PDFTOPPM_BIN` | `pdftoppm` | pdftoppm binary |

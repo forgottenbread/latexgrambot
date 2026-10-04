@@ -11,11 +11,85 @@ var textCommands = map[string]bool{
 	"textbf": true, "textit": true, "emph": true, "underline": true,
 	"uline": true, "texttt": true, "textsuperscript": true,
 	"textsubscript": true, "textrm": true, "textsf": true, "textnormal": true,
-	"textup": true, "textmd": true, "textcolor": true,
+	"textup": true, "textmd": true, "textsl": true, "textsc": true,
+	"textcolor": true, "color": true, "colorbox": true, "fcolorbox": true,
 	"href": true, "url": true, "hyperlink": true, "hypertarget": true,
-	"section": true, "subsection": true,
-	"subsubsection": true, "item": true, "maketitle": true, "title": true,
-	"author": true, "documentclass": true, "par": true,
+	"nolinkurl": true, "label": true, "ref": true, "pageref": true,
+	"autoref": true, "part": true, "chapter": true, "section": true,
+	"subsection": true, "subsubsection": true, "paragraph": true,
+	"subparagraph": true, "item": true, "maketitle": true, "title": true,
+	"author": true, "date": true, "thanks": true, "documentclass": true,
+	"usepackage": true, "includegraphics": true, "caption": true,
+	"footnote": true, "marginpar": true, "par": true, "newline": true,
+	"linebreak": true, "pagebreak": true, "newpage": true,
+	"clearpage": true, "cleardoublepage": true, "noindent": true,
+	"indent": true, "centering": true, "raggedright": true,
+	"raggedleft": true, "hspace": true, "vspace": true, "hfill": true,
+	"vfill": true, "smallskip": true, "medskip": true, "bigskip": true,
+	"mbox": true, "makebox": true, "parbox": true, "fbox": true,
+	"raisebox": true, "rotatebox": true, "resizebox": true,
+	"bfseries": true, "mdseries": true, "rmfamily": true,
+	"sffamily": true, "ttfamily": true, "upshape": true, "itshape": true,
+	"slshape": true, "scshape": true, "normalfont": true,
+	"LaTeX": true, "TeX": true, "copyright": true, "registered": true,
+	"circledR": true, "pounds": true, "euro": true, "yen": true,
+	"degree": true, "celsius": true, "textbullet": true, "S": true, "P": true,
+	"tiny": true, "scriptsize": true, "footnotesize": true,
+	"small": true, "normalsize": true, "large": true, "Large": true,
+	"LARGE": true, "huge": true, "Huge": true,
+}
+
+// mathCommands is deliberately a positive allowlist. An unknown command may
+// be a text macro from a user's preamble, so it must never cause automatic
+// math wrapping. Users can remove that ambiguity with explicit delimiters.
+var mathCommands = commandSet(`
+	frac dfrac tfrac binom dbinom tbinom sqrt root
+	overline underline overbrace underbrace overset underset stackrel
+	hat widehat check widecheck breve acute grave tilde widetilde bar vec
+	dot ddot dddot ddddot mathring
+	left right middle big Big bigg Bigg bigl bigr Bigl Bigr biggl biggr Biggl Biggr
+	mathrm mathbf mathsf mathtt mathit mathnormal mathcal mathbb mathfrak
+	boldsymbol pmb operatorname text mod bmod pmod pod
+	lim liminf limsup max min sup inf det gcd Pr log ln exp sin cos tan cot sec csc
+	arcsin arccos arctan sinh cosh tanh coth ker dim hom arg deg
+	alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa
+	varkappa lambda mu nu xi omicron pi varpi rho varrho sigma varsigma tau
+	upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega
+	aleph beth gimel daleth hbar hslash imath jmath ell wp Re Im partial nabla infty
+	forall exists nexists emptyset varnothing neg lnot top bot angle surd prime
+	pm mp times div cdot ast star circ bullet cap cup uplus sqcap sqcup vee wedge
+	setminus smallsetminus wr diamond bigtriangleup bigtriangledown triangleleft triangleright
+	oplus ominus otimes oslash odot bigcirc dagger dag ddagger ddag amalg
+	boxplus boxminus boxtimes boxdot ltimes rtimes
+	leq le geq ge neq ne equiv models prec succ sim perp preceq succeq simeq mid
+	ll gg asymp parallel subset supset approx bowtie subseteq supseteq cong
+	in ni owns propto vdash dashv notin nleq ngeq nless ngtr nsim ncong
+	leftarrow gets rightarrow to leftrightarrow uparrow downarrow updownarrow
+	Leftarrow Rightarrow Leftrightarrow Uparrow Downarrow Updownarrow mapsto longmapsto
+	longleftarrow longrightarrow longleftrightarrow Longleftarrow Longrightarrow Longleftrightarrow
+	nearrow searrow swarrow nwarrow hookleftarrow hookrightarrow
+	sum prod coprod bigcup bigcap bigvee bigwedge bigoplus bigotimes bigodot biguplus bigsqcup
+	int iint iiint iiiint oint oiint oiiint smallint
+	lceil rceil lfloor rfloor lbrace rbrace langle rangle lvert rvert lVert rVert vert Vert
+	dots ldots cdots vdots ddots iddots mathellipsis
+`)
+
+func commandSet(names string) map[string]bool {
+	set := make(map[string]bool)
+	for _, name := range strings.Fields(names) {
+		set[name] = true
+	}
+	return set
+}
+
+// sizeCommands contains LaTeX's declaration-style font-size commands. Rich
+// messages don't have arbitrary inline font sizes; their only larger text
+// primitive is a section heading. Map the five enlarged sizes monotonically
+// to heading levels and treat normal/reduced sizes as ordinary paragraphs.
+var sizeCommands = map[string]int{
+	"tiny": 0, "scriptsize": 0, "footnotesize": 0,
+	"small": 0, "normalsize": 0,
+	"large": 5, "Large": 4, "LARGE": 3, "huge": 2, "Huge": 1,
 }
 
 // wrapperEnvironments are environments whose markers are dropped from text
@@ -136,17 +210,16 @@ func IsMathExpression(source string) bool {
 	if strings.Contains(trimmed, "$") || strings.Contains(trimmed, `\(`) || strings.Contains(trimmed, `\[`) {
 		return false
 	}
-	for _, command := range commandsIn(trimmed) {
-		if textCommands[command] {
-			return false
-		}
-	}
-	for _, environment := range environmentsIn(trimmed) {
+	environments := environmentsIn(trimmed)
+	for _, environment := range environments {
 		if !mathEnvironments[environment] {
 			return false
 		}
 	}
-	return true
+	if len(environments) > 0 {
+		return true
+	}
+	return isPureMath(trimmed)
 }
 
 // ContainsMathEnvironment reports whether the source contains a math
@@ -242,18 +315,132 @@ func isPureMath(source string) bool {
 	if strings.Contains(source, "$") || strings.Contains(source, `\(`) || strings.Contains(source, `\[`) {
 		return false
 	}
-	for _, command := range commandsIn(source) {
-		if textCommands[command] {
-			return false
-		}
-	}
-	for _, env := range environmentsIn(source) {
+	environments := environmentsIn(source)
+	for _, env := range environments {
 		if !mathEnvironments[env] {
 			return false
 		}
 	}
-	return true
+	if len(environments) > 0 {
+		return true
+	}
+	commands := commandsIn(source)
+	hasMathCommand := false
+	for _, command := range commands {
+		if textCommands[command] {
+			return false
+		}
+		if isMathSpacingCommand(command) {
+			continue
+		}
+		if !mathCommands[command] {
+			if _, ok := symbolCommands[command]; ok {
+				hasMathCommand = true
+				continue
+			}
+			return false
+		}
+		hasMathCommand = true
+	}
+	if hasMathCommand {
+		return true
+	}
+	return hasMathSyntax(source)
 }
+
+func isMathSpacingCommand(command string) bool {
+	switch command {
+	case ",", ";", ":", "!", " ":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasMathSyntax recognizes strong math-only signals in command-free input.
+// Plain words and punctuation stay text; ambiguous input can always opt into
+// math with explicit delimiters.
+func hasMathSyntax(source string) bool {
+	if strings.Contains(source, "://") {
+		return false
+	}
+	if strings.ContainsAny(source, "^_=<>") {
+		return true
+	}
+	trimmed := strings.TrimSpace(source)
+	if len(trimmed) > 1 && (trimmed[0] == '+' || trimmed[0] == '-') && isASCIIDigit(trimmed[1]) {
+		return true
+	}
+	for index := 1; index+1 < len(source); index++ {
+		switch source[index] {
+		case '+', '*', '/':
+			left, right, ok := surroundingNonSpace(source, index)
+			if ok && isMathOperand(left) && isMathOperand(right) &&
+				(isASCIIDigit(left) || isASCIIDigit(right) || isSingleLetterOperation(source, index)) {
+				return true
+			}
+		case '-':
+			left, right, ok := surroundingNonSpace(source, index)
+			if ok && (isASCIIDigit(left) || isASCIIDigit(right) || isSingleLetterOperation(source, index)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func surroundingNonSpace(source string, index int) (byte, byte, bool) {
+	left := index - 1
+	for left >= 0 && unicode.IsSpace(rune(source[left])) {
+		left--
+	}
+	right := index + 1
+	for right < len(source) && unicode.IsSpace(rune(source[right])) {
+		right++
+	}
+	if left < 0 || right >= len(source) {
+		return 0, 0, false
+	}
+	return source[left], source[right], true
+}
+
+func isSingleLetterOperation(source string, index int) bool {
+	left := index - 1
+	for left >= 0 && unicode.IsSpace(rune(source[left])) {
+		left--
+	}
+	right := index + 1
+	for right < len(source) && unicode.IsSpace(rune(source[right])) {
+		right++
+	}
+	if left < 0 || right >= len(source) || !isASCIILetter(source[left]) || !isASCIILetter(source[right]) {
+		return false
+	}
+	before := left - 1
+	for before >= 0 && unicode.IsSpace(rune(source[before])) {
+		before--
+	}
+	after := right + 1
+	for after < len(source) && unicode.IsSpace(rune(source[after])) {
+		after++
+	}
+	return (before < 0 || isMathBoundary(source[before])) &&
+		(after >= len(source) || isMathBoundary(source[after]))
+}
+
+func isASCIILetter(char byte) bool {
+	return (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z')
+}
+
+func isMathBoundary(char byte) bool {
+	return strings.ContainsRune("+-*/=<>^_,()[]{}", rune(char))
+}
+
+func isMathOperand(char byte) bool {
+	return isASCIIDigit(char) || (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char == ')' || char == '}'
+}
+
+func isASCIIDigit(char byte) bool { return char >= '0' && char <= '9' }
 
 func commandsIn(source string) []string {
 	var commands []string
@@ -340,6 +527,16 @@ func (p *parser) parseBlocks() []Block {
 		if trimmed == "" {
 			return
 		}
+		if content, size, ok := leadingSizeDeclaration(trimmed); ok {
+			if content == "" {
+				return
+			}
+			if size > 0 {
+				blocks = append(blocks, Block{Type: "heading", Text: parseInline(content), Size: size})
+				return
+			}
+			trimmed = content
+		}
 		blocks = append(blocks, Block{Type: "paragraph", Text: parseInline(trimmed)})
 	}
 
@@ -416,6 +613,30 @@ func (p *parser) parseBlocks() []Block {
 	}
 	flush()
 	return blocks
+}
+
+// leadingSizeDeclaration strips a declaration-style font-size command at the
+// beginning of a block and returns the closest supported rich heading size.
+func leadingSizeDeclaration(source string) (content string, size int, ok bool) {
+	source = strings.TrimSpace(source)
+	if inner, after, grouped := readGroupAt(source, 0); grouped && after == len(source) {
+		if content, size, ok = leadingSizeDeclaration(inner); ok {
+			return content, size, true
+		}
+	}
+	if !strings.HasPrefix(source, `\`) {
+		return source, 0, false
+	}
+	name, next := readCommand(source, 0)
+	size, ok = sizeCommands[name]
+	if !ok {
+		return source, 0, false
+	}
+	content = strings.TrimSpace(source[next:])
+	if inner, after, grouped := readGroupAt(content, 0); grouped && after == len(content) {
+		content = strings.TrimSpace(inner)
+	}
+	return content, size, true
 }
 
 // blankLineAhead reports whether the newline at the current position is
@@ -544,6 +765,13 @@ func parseInline(source string) any {
 				continue
 			}
 			arg, after, hasArg := readGroupAt(source, next)
+			if _, ok := sizeCommands[name]; ok {
+				// Declarations are handled at block level when possible. Inside
+				// another construct, discard the unsupported size change instead
+				// of leaking the LaTeX command into the visible rich text.
+				index = skipControlWordSpace(source, skipEmptyGroup(source, next))
+				continue
+			}
 			switch name {
 			case "textbf":
 				if hasArg {
@@ -687,6 +915,20 @@ func parseInline(source string) any {
 		return ""
 	}
 	return parts
+}
+
+// skipControlWordSpace consumes whitespace following a control word, as TeX
+// does for declaration commands such as \Huge and \small.
+func skipControlWordSpace(source string, index int) int {
+	for index < len(source) {
+		switch source[index] {
+		case ' ', '\t', '\r', '\n':
+			index++
+		default:
+			return index
+		}
+	}
+	return index
 }
 
 // skipEmptyGroup skips an empty {} group immediately following a control

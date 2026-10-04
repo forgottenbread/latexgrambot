@@ -39,8 +39,8 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.RichTextEnabled {
 		t.Error("RichTextEnabled = false, want true by default")
 	}
-	if !cfg.RichDefaultMath {
-		t.Error("RichDefaultMath = false, want true by default")
+	if cfg.RichDefaultMath {
+		t.Error("RichDefaultMath = true, want false by default")
 	}
 	if cfg.S3PresignTTL != time.Hour {
 		t.Errorf("S3PresignTTL = %s, want 1h", cfg.S3PresignTTL)
@@ -80,13 +80,13 @@ func TestLoadRejectsIncompleteS3(t *testing.T) {
 
 func TestLoadRichDefaultMathToggle(t *testing.T) {
 	setRequired(t)
-	t.Setenv("RICH_DEFAULT_MATH", "false")
+	t.Setenv("RICH_DEFAULT_MATH", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.RichDefaultMath {
-		t.Error("RichDefaultMath = true, want false")
+	if !cfg.RichDefaultMath {
+		t.Error("RichDefaultMath = false, want true")
 	}
 
 	t.Setenv("RICH_DEFAULT_MATH", "banana")
